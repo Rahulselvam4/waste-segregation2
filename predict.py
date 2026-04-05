@@ -8,16 +8,18 @@ import cv2
 import os
 import argparse
 from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
-from model_builder import load_model_safe
+from model_builder import load_model_safe, CLASS_NAMES, IMG_SIZE
 
-CLASS_NAMES = ['cardboard', 'glass', 'metal', 'paper', 'plastic', 'trash']
-IMG_SIZE    = (224, 224)
+# ── Confidence threshold ──────────────────────────────────────────
+# If model confidence is below this, item is classified as "other"
+# Meaning: the image doesn't clearly match any of the 10 known classes
+CONFIDENCE_THRESHOLD = 0.55
 
 
 def preprocess_image(image_input):
     """
-    Accepts: file path (str), uploaded file object, PIL Image, numpy array.
-    Returns: numpy array shape (1, 224, 224, 3) ready for model.predict()
+    Accepts file path, Streamlit UploadedFile, PIL Image, or numpy array.
+    Returns numpy array shape (1, 130, 130, 3) ready for model.predict()
     """
     if isinstance(image_input, str):
         img = cv2.imread(image_input)
@@ -26,13 +28,16 @@ def preprocess_image(image_input):
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
     elif hasattr(image_input, 'read'):
-        # Streamlit UploadedFile or file-like object
-        file_bytes = np.asarray(bytearray(image_input.read()), dtype=np.uint8)
-        img        = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
-        img        = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # Streamlit UploadedFile
+        file_bytes = np.asarray(
+            bytearray(image_input.read()), dtype=np.uint8
+        )
+        img = cv2.imdecode(file_bytes, cv2.IMREAD_COLOR)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         image_input.seek(0)
 
     else:
+        # PIL Image or numpy array
         img = np.array(image_input)
         if img.ndim == 2:
             img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
@@ -40,19 +45,21 @@ def preprocess_image(image_input):
             img = img[:, :, :3]
 
     img = cv2.resize(img, IMG_SIZE).astype('float32')
-    img = preprocess_input(img)              # scales [0,255] → [-1,+1]
-    return np.expand_dims(img, axis=0)       # (1,224,224,3)
+    img = preprocess_input(img)              # [0,255] → [-1,+1]
+    return np.expand_dims(img, axis=0)       # (1, 130, 130, 3)
 
 
 def predict(image_input):
     """
     Classifies a single waste image.
 
-    Returns dict:
-        predicted_class  (str)   — e.g. 'plastic'
+    Returns dict with:
+        predicted_class  (str)   — e.g. 'plastic' or 'other'
         confidence       (float) — 0.0 to 100.0
-        all_probabilities(dict)  — {class: probability}
-        top3             (list)  — [(class, prob), ...]
+        all_probabilities(dict)  — {class: probability} for 10 classes
+        top3             (list)  — top 3 predictions
+        is_other         (bool)  — True if confidence below threshold
+        message          (str)   — extra message for 'other' items
     """
     model     = load_model_safe()
     processed = preprocess_image(image_input)
@@ -62,19 +69,38 @@ def predict(image_input):
     predicted_idx   = int(np.argmax(raw_probs))
     predicted_class = CLASS_NAMES[predicted_idx]
     confidence      = float(raw_probs[predicted_idx]) * 100
-    top3            = sorted(all_probs.items(), key=lambda x: x[1], reverse=True)[:3]
+    top3            = sorted(
+        all_probs.items(), key=lambda x: x[1], reverse=True
+    )[:3]
+
+    # ── "Other" fallback ─────────────────────────────────────────
+    # If the model is not confident enough about any known class,
+    # return 'other' — this handles items outside the 10 trained classes
+    is_other = confidence < (CONFIDENCE_THRESHOLD * 100)
+    message  = ""
+
+    if is_other:
+        predicted_class = "other"
+        message = (
+            f"This item doesn't clearly match any of the {len(CLASS_NAMES)} "
+            f"known waste categories (best guess: {CLASS_NAMES[predicted_idx]} "
+            f"at {confidence:.1f}%). Please consult your local waste authority "
+            f"or check the item's packaging for disposal instructions."
+        )
 
     return {
         "predicted_class":    predicted_class,
         "confidence":         round(confidence, 2),
         "all_probabilities":  all_probs,
         "top3":               top3,
+        "is_other":           is_other,
+        "message":            message,
     }
 
 
 def predict_batch(files):
-    """Classifies multiple images efficiently."""
-    model  = load_model_safe()
+    """Classifies multiple images efficiently in one forward pass."""
+    model = load_model_safe()
     batch, valid_flags = [], []
 
     for f in files:
@@ -84,7 +110,8 @@ def predict_batch(files):
             valid_flags.append(True)
         except Exception as e:
             print(f"Skipping: {e}")
-            batch.append(np.zeros((224, 224, 3), dtype='float32'))
+            batch.append(np.zeros((IMG_SIZE[0], IMG_SIZE[1], 3),
+                                   dtype='float32'))
             valid_flags.append(False)
 
     raw_preds = model.predict(np.stack(batch), verbose=0)
@@ -94,16 +121,25 @@ def predict_batch(files):
         if not valid:
             results.append({"error": "Could not process image"})
             continue
+
         all_probs       = {n: float(p) for n, p in zip(CLASS_NAMES, probs)}
         predicted_idx   = int(np.argmax(probs))
         predicted_class = CLASS_NAMES[predicted_idx]
         confidence      = float(probs[predicted_idx]) * 100
-        top3            = sorted(all_probs.items(), key=lambda x: x[1], reverse=True)[:3]
+        top3            = sorted(all_probs.items(),
+                                  key=lambda x: x[1], reverse=True)[:3]
+
+        is_other = confidence < (CONFIDENCE_THRESHOLD * 100)
+        if is_other:
+            predicted_class = "other"
+
         results.append({
             "predicted_class":   predicted_class,
             "confidence":        round(confidence, 2),
             "all_probabilities": all_probs,
             "top3":              top3,
+            "is_other":          is_other,
+            "message":           "Low confidence — item may not match known categories" if is_other else "",
         })
 
     return results
@@ -115,12 +151,17 @@ if __name__ == "__main__":
     args   = parser.parse_args()
 
     result = predict(args.image)
-    print(f"\n{'═'*40}")
-    print(f"  Prediction : {result['predicted_class'].upper()}")
-    print(f"  Confidence : {result['confidence']:.1f}%")
-    print(f"{'─'*40}")
+    print(f"\n{'='*45}")
+    if result['is_other']:
+        print(f"  Result     : OTHER / UNKNOWN")
+        print(f"  Best guess : {result['top3'][0][0]} ({result['confidence']:.1f}%)")
+        print(f"  Message    : {result['message']}")
+    else:
+        print(f"  Prediction : {result['predicted_class'].upper()}")
+        print(f"  Confidence : {result['confidence']:.1f}%")
+    print(f"{'─'*45}")
     for cls, prob in sorted(result['all_probabilities'].items(),
-                            key=lambda x: x[1], reverse=True):
+                             key=lambda x: x[1], reverse=True):
         bar = "█" * int(prob * 25)
         print(f"  {cls:12s}: {prob*100:5.1f}%  {bar}")
-    print(f"{'═'*40}\n")
+    print(f"{'='*45}\n")

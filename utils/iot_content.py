@@ -12,7 +12,7 @@ IOT_HARDWARE = [
 IOT_WORKFLOW = [
     ("Waste Placed",    "Person drops item into the bin opening"),
     ("Motion Detected", "PIR sensor triggers camera capture"),
-    ("Image Captured",  "Camera takes 224×224 photo of the item"),
+    ("Image Captured",  "Camera takes 130×130 photo of the item"),
     ("AI Classifies",   "TFLite model predicts category in ~200ms"),
     ("Servo Opens",     "Correct compartment flap rotates open"),
     ("Item Sorted",     "Waste falls into right section, flap closes"),
@@ -66,7 +66,7 @@ outp = interpreter.get_output_details()
 def classify(path):
     img = cv2.imread(path)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (224, 224)).astype('float32')
+    img = cv2.resize(img, (130, 130)).astype('float32')
     img = (img / 127.5) - 1.0          # MobileNetV2 scale
     img = np.expand_dims(img, 0)
     interpreter.set_tensor(inp[0]['index'], img)

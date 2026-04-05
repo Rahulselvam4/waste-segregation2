@@ -15,7 +15,7 @@ from PIL import Image
 from datetime import datetime
 
 from predict import predict, predict_batch
-from utils.disposal_info import DISPOSAL_DATA, GLOBAL_STATS
+from utils.disposal_info import DISPOSAL_DATA, GLOBAL_STATS, RECYCLE_GUIDE
 from utils.iot_content import (
     IOT_HARDWARE, IOT_WORKFLOW, IOT_SOFTWARE, TFLITE_CODE, PI_CODE
 )
@@ -553,6 +553,44 @@ def render_disposal(cls):
             💡 <strong>Did you know?</strong>&nbsp; {d['fact']}
         </div>""", unsafe_allow_html=True)
 
+def render_recycle_guide(cls):
+    if cls == "other" or cls not in RECYCLE_GUIDE:
+        return
+    r = RECYCLE_GUIDE[cls]
+    d = DISPOSAL_DATA.get(cls, {})
+    with st.expander(f"🔄  How to Recycle — {cls.capitalize()}"):
+        for i, step in enumerate(r['steps'], 1):
+            st.markdown(f"""
+            <div class="d-step"><div class="d-num">{i}</div><div>{step}</div></div>
+            """, unsafe_allow_html=True)
+        st.markdown(f"""
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px;">
+            <div style="background:{d.get('bg','#f9fafb')};border-left:3px solid {d.get('accent','#9ca3af')};
+                        border-radius:0 var(--r) var(--r) 0;padding:12px 14px;">
+                <div style="font-size:10px;font-weight:700;color:{d.get('color','#374151')};
+                            text-transform:uppercase;letter-spacing:0.8px;margin-bottom:5px;">
+                    Recycled into
+                </div>
+                <div style="font-size:12px;color:{d.get('color','#374151')}99;">
+                    {r['recycled_into']}
+                </div>
+            </div>
+            <div style="background:{d.get('bg','#f9fafb')};border-left:3px solid {d.get('accent','#9ca3af')};
+                        border-radius:0 var(--r) var(--r) 0;padding:12px 14px;">
+                <div style="font-size:10px;font-weight:700;color:{d.get('color','#374151')};
+                            text-transform:uppercase;letter-spacing:0.8px;margin-bottom:5px;">
+                    Recycling process
+                </div>
+                <div style="font-size:12px;color:{d.get('color','#374151')}99;">
+                    {r['process']}
+                </div>
+            </div>
+        </div>
+        <div class="fact-strip" style="background:{d.get('bg','#f9fafb')};
+                    border-color:{d.get('accent','#9ca3af')};color:{d.get('color','#374151')};">
+            💡 <strong>Tip:</strong>&nbsp; {r['tip']}
+        </div>
+        """, unsafe_allow_html=True)
 
 def render_env(cls):
     if cls == "other":
@@ -825,6 +863,7 @@ if st.session_state.page == "classify":
 
             if not result.get('is_other', False):
                 st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
+                render_recycle_guide(result['predicted_class'])
                 render_disposal(result['predicted_class'])
                 st.markdown("<div style='height:6px'></div>", unsafe_allow_html=True)
                 sec_head("Environmental Impact")
